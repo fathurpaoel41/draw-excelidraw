@@ -1,13 +1,18 @@
 import { Excalidraw, MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import {
+  ArrowLeft,
+  Copy,
   Database,
   FileDown,
   FilePlus2,
   FolderOpen,
   HardDrive,
   ImageDown,
+  Link2Off,
   Loader2,
+  RefreshCw,
   Save,
+  Share2,
   UserCheck,
   UserPlus,
   Workflow,
@@ -17,7 +22,7 @@ import type { AuthUser } from "../lib/api";
 import { IS_CLOUD_ENABLED } from "../lib/config";
 import { useAuth } from "../hooks/useAuth";
 import { useHotkeys } from "../hooks/useHotkeys";
-import { useWorkspace } from "../hooks/useWorkspace";
+import { useWorkspace, type SharedSessionInfo } from "../hooks/useWorkspace";
 import { exportSceneToPng } from "../lib/exportPng";
 import type {
   ExcalidrawImperativeAPI,
@@ -25,12 +30,14 @@ import type {
   SyncStatus,
   Theme,
   ToastMessage,
+  WorkspaceRecord,
   WorkspaceWithFiles,
 } from "../types/workspace";
 import { AuthModal } from "./AuthModal";
 import { ConflictModal } from "./ConflictModal";
 import { ExportPdfModal } from "./ExportPdfModal";
 import { MermaidModal } from "./MermaidModal";
+import { ShareModal } from "./ShareModal";
 import { TopRightControls } from "./TopRightControls";
 import { WorkspaceDrawer } from "./WorkspaceDrawer";
 
@@ -43,6 +50,18 @@ const EXCALIDRAW_UI_OPTIONS = {
     clearCanvas: true,
     export: { saveFileToDisk: true },
     loadScene: true,
+    saveAsImage: true,
+    saveToActiveFile: false,
+    toggleTheme: true,
+  },
+} as const;
+
+const EXCALIDRAW_READONLY_UI_OPTIONS = {
+  canvasActions: {
+    changeViewBackgroundColor: false,
+    clearCanvas: false,
+    export: { saveFileToDisk: true },
+    loadScene: false,
     saveAsImage: true,
     saveToActiveFile: false,
     toggleTheme: true,
@@ -67,11 +86,17 @@ interface ExcalidrawViewportProps {
   storageMode: StorageMode;
   themePref: ThemePref;
   user: AuthUser | null;
+  isShared: boolean;
+  isReadOnly: boolean;
   onSelectTheme: (next: ThemePref) => void;
   onOpenDrawer: () => void;
   onNewCanvas: () => void;
   onForceSave: () => void;
   onQuickToggleStorage: () => void;
+  onOpenShare: () => void;
+  onRefreshShared: () => void;
+  onForkShared: () => void;
+  onExitShared: () => void;
   onExportPng: () => void;
   onOpenPdf: () => void;
   onOpenMermaid: () => void;
@@ -88,11 +113,17 @@ const ExcalidrawViewport = memo(function ExcalidrawViewport({
   storageMode,
   themePref,
   user,
+  isShared,
+  isReadOnly,
   onSelectTheme,
   onOpenDrawer,
   onNewCanvas,
   onForceSave,
   onQuickToggleStorage,
+  onOpenShare,
+  onRefreshShared,
+  onForkShared,
+  onExitShared,
   onExportPng,
   onOpenPdf,
   onOpenMermaid,
@@ -106,137 +137,228 @@ const ExcalidrawViewport = memo(function ExcalidrawViewport({
       onChange={onSceneChange}
       theme={resolvedTheme}
       name={workspaceTitle}
-      UIOptions={EXCALIDRAW_UI_OPTIONS}
+      viewModeEnabled={isReadOnly}
+      UIOptions={
+        isReadOnly ? EXCALIDRAW_READONLY_UI_OPTIONS : EXCALIDRAW_UI_OPTIONS
+      }
     >
       <MainMenu>
-        <MainMenu.Item
-          icon={<FolderOpen className="h-4 w-4" />}
-          shortcut="⌘⇧W"
-          onSelect={onOpenDrawer}
-        >
-          My Canvas & Folder
-        </MainMenu.Item>
-        <MainMenu.Item
-          icon={<FilePlus2 className="h-4 w-4" />}
-          shortcut="Alt+N"
-          onSelect={onNewCanvas}
-        >
-          New Canvas
-        </MainMenu.Item>
-        <MainMenu.Item
-          icon={<Save className="h-4 w-4" />}
-          shortcut="⌘S"
-          onSelect={onForceSave}
-        >
-          Simpan Sekarang
-        </MainMenu.Item>
-        {IS_CLOUD_ENABLED && (
-          <MainMenu.Item
-            icon={
-              storageMode === "cloud" ? (
-                <HardDrive className="h-4 w-4" />
-              ) : (
-                <Database className="h-4 w-4" />
-              )
-            }
-            onSelect={onQuickToggleStorage}
-          >
-            {storageMode === "cloud"
-              ? "Kelola Penyimpanan (Database)"
-              : "Simpan Canvas ini ke Database"}
-          </MainMenu.Item>
-        )}
-
-        <MainMenu.Separator />
-
-        <MainMenu.DefaultItems.LoadScene />
-        <MainMenu.DefaultItems.Export />
-        <MainMenu.DefaultItems.SaveAsImage />
-        <MainMenu.Item
-          icon={<ImageDown className="h-4 w-4" />}
-          onSelect={onExportPng}
-        >
-          Export PNG Cepat
-        </MainMenu.Item>
-        <MainMenu.Item
-          icon={<FileDown className="h-4 w-4" />}
-          shortcut="⌘⇧P"
-          onSelect={onOpenPdf}
-        >
-          Export PDF...
-        </MainMenu.Item>
-
-        <MainMenu.Separator />
-
-        <MainMenu.Item
-          icon={<Workflow className="h-4 w-4" />}
-          shortcut="⌘⇧M"
-          onSelect={onOpenMermaid}
-        >
-          Mermaid to Excalidraw...
-        </MainMenu.Item>
-        <MainMenu.DefaultItems.CommandPalette />
-        <MainMenu.DefaultItems.SearchMenu />
-        <MainMenu.DefaultItems.Help />
-        <MainMenu.DefaultItems.ClearCanvas />
-
-        <MainMenu.Separator />
-
-        <MainMenu.DefaultItems.ToggleTheme
-          allowSystemTheme
-          theme={themePref}
-          onSelect={onSelectTheme}
-        />
-        <MainMenu.DefaultItems.ChangeCanvasBackground />
-
-        {IS_CLOUD_ENABLED && (
+        {isShared ? (
           <>
+            <MainMenu.Item
+              icon={<RefreshCw className="h-4 w-4" />}
+              onSelect={onRefreshShared}
+            >
+              Muat Ulang dari Server
+            </MainMenu.Item>
+            {!isReadOnly && (
+              <MainMenu.Item
+                icon={<Save className="h-4 w-4" />}
+                shortcut="⌘S"
+                onSelect={onForceSave}
+              >
+                Simpan Perubahan
+              </MainMenu.Item>
+            )}
+            <MainMenu.Item
+              icon={<Copy className="h-4 w-4" />}
+              onSelect={onForkShared}
+            >
+              Simpan Salinan ke My Canvas
+            </MainMenu.Item>
+            <MainMenu.Item
+              icon={<ArrowLeft className="h-4 w-4" />}
+              onSelect={onExitShared}
+            >
+              Keluar ke Kanvas Saya
+            </MainMenu.Item>
+
+            <MainMenu.Separator />
+
+            {!isReadOnly && <MainMenu.DefaultItems.LoadScene />}
+            <MainMenu.DefaultItems.Export />
+            <MainMenu.DefaultItems.SaveAsImage />
+            <MainMenu.Item
+              icon={<ImageDown className="h-4 w-4" />}
+              onSelect={onExportPng}
+            >
+              Export PNG Cepat
+            </MainMenu.Item>
+            <MainMenu.Item
+              icon={<FileDown className="h-4 w-4" />}
+              shortcut="⌘⇧P"
+              onSelect={onOpenPdf}
+            >
+              Export PDF...
+            </MainMenu.Item>
+
+            <MainMenu.Separator />
+
+            {!isReadOnly && (
+              <MainMenu.Item
+                icon={<Workflow className="h-4 w-4" />}
+                shortcut="⌘⇧M"
+                onSelect={onOpenMermaid}
+              >
+                Mermaid to Excalidraw...
+              </MainMenu.Item>
+            )}
+            <MainMenu.DefaultItems.CommandPalette />
+            <MainMenu.DefaultItems.SearchMenu />
+            <MainMenu.DefaultItems.Help />
+            {!isReadOnly && <MainMenu.DefaultItems.ClearCanvas />}
+
+            <MainMenu.Separator />
+
+            <MainMenu.DefaultItems.ToggleTheme
+              allowSystemTheme
+              theme={themePref}
+              onSelect={onSelectTheme}
+            />
+            {!isReadOnly && <MainMenu.DefaultItems.ChangeCanvasBackground />}
+          </>
+        ) : (
+          <>
+            <MainMenu.Item
+              icon={<FolderOpen className="h-4 w-4" />}
+              shortcut="⌘⇧W"
+              onSelect={onOpenDrawer}
+            >
+              My Canvas & Folder
+            </MainMenu.Item>
+            <MainMenu.Item
+              icon={<FilePlus2 className="h-4 w-4" />}
+              shortcut="Alt+N"
+              onSelect={onNewCanvas}
+            >
+              New Canvas
+            </MainMenu.Item>
+            <MainMenu.Item
+              icon={<Save className="h-4 w-4" />}
+              shortcut="⌘S"
+              onSelect={onForceSave}
+            >
+              Simpan Sekarang
+            </MainMenu.Item>
+            {IS_CLOUD_ENABLED && (
+              <>
+                <MainMenu.Item
+                  icon={<Share2 className="h-4 w-4" />}
+                  onSelect={onOpenShare}
+                >
+                  Bagikan Link (Share)...
+                </MainMenu.Item>
+                <MainMenu.Item
+                  icon={
+                    storageMode === "cloud" ? (
+                      <HardDrive className="h-4 w-4" />
+                    ) : (
+                      <Database className="h-4 w-4" />
+                    )
+                  }
+                  onSelect={onQuickToggleStorage}
+                >
+                  {storageMode === "cloud"
+                    ? "Kelola Penyimpanan (Database)"
+                    : "Simpan Canvas ini ke Database"}
+                </MainMenu.Item>
+              </>
+            )}
+
+            <MainMenu.Separator />
+
+            <MainMenu.DefaultItems.LoadScene />
+            <MainMenu.DefaultItems.Export />
+            <MainMenu.DefaultItems.SaveAsImage />
+            <MainMenu.Item
+              icon={<ImageDown className="h-4 w-4" />}
+              onSelect={onExportPng}
+            >
+              Export PNG Cepat
+            </MainMenu.Item>
+            <MainMenu.Item
+              icon={<FileDown className="h-4 w-4" />}
+              shortcut="⌘⇧P"
+              onSelect={onOpenPdf}
+            >
+              Export PDF...
+            </MainMenu.Item>
+
             <MainMenu.Separator />
 
             <MainMenu.Item
-              icon={
-                user ? (
-                  <UserCheck className="h-4 w-4" />
-                ) : (
-                  <UserPlus className="h-4 w-4" />
-                )
-              }
-              onSelect={onOpenAuth}
+              icon={<Workflow className="h-4 w-4" />}
+              shortcut="⌘⇧M"
+              onSelect={onOpenMermaid}
             >
-              {user
-                ? `Akun Database: ${user.username}`
-                : "Masuk Akun Database..."}
+              Mermaid to Excalidraw...
             </MainMenu.Item>
+            <MainMenu.DefaultItems.CommandPalette />
+            <MainMenu.DefaultItems.SearchMenu />
+            <MainMenu.DefaultItems.Help />
+            <MainMenu.DefaultItems.ClearCanvas />
+
+            <MainMenu.Separator />
+
+            <MainMenu.DefaultItems.ToggleTheme
+              allowSystemTheme
+              theme={themePref}
+              onSelect={onSelectTheme}
+            />
+            <MainMenu.DefaultItems.ChangeCanvasBackground />
+
+            {IS_CLOUD_ENABLED && (
+              <>
+                <MainMenu.Separator />
+
+                <MainMenu.Item
+                  icon={
+                    user ? (
+                      <UserCheck className="h-4 w-4" />
+                    ) : (
+                      <UserPlus className="h-4 w-4" />
+                    )
+                  }
+                  onSelect={onOpenAuth}
+                >
+                  {user
+                    ? `Akun Database: ${user.username}`
+                    : "Masuk Akun Database..."}
+                </MainMenu.Item>
+              </>
+            )}
           </>
         )}
       </MainMenu>
 
-      <WelcomeScreen>
-        <WelcomeScreen.Hints.MenuHint />
-        <WelcomeScreen.Hints.ToolbarHint />
-        <WelcomeScreen.Hints.HelpHint />
-        <WelcomeScreen.Center>
-          <WelcomeScreen.Center.Heading>
-            Mulai Gambar Workflow Anda
-          </WelcomeScreen.Center.Heading>
-          <WelcomeScreen.Center.Menu>
-            <WelcomeScreen.Center.MenuItem
-              icon={<FolderOpen className="h-4 w-4" />}
-              onSelect={onOpenDrawer}
-            >
-              Buka My Canvas
-            </WelcomeScreen.Center.MenuItem>
-            <WelcomeScreen.Center.MenuItem
-              icon={<Workflow className="h-4 w-4" />}
-              onSelect={onOpenMermaid}
-            >
-              Generate dari Mermaid
-            </WelcomeScreen.Center.MenuItem>
-            <WelcomeScreen.Center.MenuItemLoadScene />
-            <WelcomeScreen.Center.MenuItemHelp />
-          </WelcomeScreen.Center.Menu>
-        </WelcomeScreen.Center>
-      </WelcomeScreen>
+      {!isShared && (
+        <WelcomeScreen>
+          <WelcomeScreen.Hints.MenuHint />
+          <WelcomeScreen.Hints.ToolbarHint />
+          <WelcomeScreen.Hints.HelpHint />
+          <WelcomeScreen.Center>
+            <WelcomeScreen.Center.Heading>
+              Mulai Gambar Workflow Anda
+            </WelcomeScreen.Center.Heading>
+            <WelcomeScreen.Center.Menu>
+              <WelcomeScreen.Center.MenuItem
+                icon={<FolderOpen className="h-4 w-4" />}
+                onSelect={onOpenDrawer}
+              >
+                Buka My Canvas
+              </WelcomeScreen.Center.MenuItem>
+              <WelcomeScreen.Center.MenuItem
+                icon={<Workflow className="h-4 w-4" />}
+                onSelect={onOpenMermaid}
+              >
+                Generate dari Mermaid
+              </WelcomeScreen.Center.MenuItem>
+              <WelcomeScreen.Center.MenuItemLoadScene />
+              <WelcomeScreen.Center.MenuItemHelp />
+            </WelcomeScreen.Center.Menu>
+          </WelcomeScreen.Center>
+        </WelcomeScreen>
+      )}
     </Excalidraw>
   );
 });
@@ -247,11 +369,16 @@ interface FloatingTopControlsProps {
   isOnline: boolean;
   theme: Theme;
   exportingPng: boolean;
+  sharedSession: SharedSessionInfo | null;
   onRename: (newTitle: string) => Promise<void>;
   onOpenDrawer: () => void;
   onExportPng: () => void;
   onOpenPdf: () => void;
   onQuickToggleStorage: () => void;
+  onOpenShare: () => void;
+  onRefreshShared: () => void;
+  onForkShared: () => void;
+  onExitShared: () => void;
 }
 
 function FloatingTopControls(props: FloatingTopControlsProps) {
@@ -317,21 +444,33 @@ export function CanvasBoard() {
   const [pdfOpen, setPdfOpen] = useState(false);
   const [exportingPng, setExportingPng] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState<WorkspaceRecord | null>(null);
   const [pendingMoveToDbId, setPendingMoveToDbId] = useState<string | null>(
     null,
   );
 
+  const isShared = Boolean(ws.sharedSession);
+  const isReadOnly = ws.sharedSession?.permission === "readonly";
+
   const openDrawer = useCallback(() => {
+    if (isShared) return;
     void ws.prepareDrawerOpen();
     setDrawerOpen(true);
-  }, [ws.prepareDrawerOpen]);
+  }, [isShared, ws.prepareDrawerOpen]);
 
-  const openMermaid = useCallback(() => setMermaidOpen(true), []);
+  const openMermaid = useCallback(() => {
+    if (isReadOnly) return;
+    setMermaidOpen(true);
+  }, [isReadOnly]);
   const openPdf = useCallback(() => setPdfOpen(true), []);
   const openAuth = useCallback(() => {
     if (!IS_CLOUD_ENABLED) return;
     setAuthOpen(true);
   }, []);
+  const openShareActive = useCallback(() => {
+    if (!IS_CLOUD_ENABLED || isShared || !ws.activeWorkspace) return;
+    setShareTarget(ws.activeWorkspace);
+  }, [isShared, ws.activeWorkspace]);
 
   const handleExportPng = useCallback(async () => {
     const api = ws.apiRef.current;
@@ -361,19 +500,42 @@ export function CanvasBoard() {
   }, [handleExportPng]);
 
   const handleNewCanvas = useCallback(() => {
+    if (isShared) return;
     void ws.createNewCanvas();
-  }, [ws.createNewCanvas]);
+  }, [isShared, ws.createNewCanvas]);
 
   const handleForceSave = useCallback(() => {
     void ws.forceSave();
   }, [ws.forceSave]);
 
   const handleToggleDrawerHotkey = useCallback(() => {
+    if (isShared) return;
     setDrawerOpen((prev) => {
       if (!prev) void ws.prepareDrawerOpen();
       return !prev;
     });
-  }, [ws.prepareDrawerOpen]);
+  }, [isShared, ws.prepareDrawerOpen]);
+
+  const handleRefreshSharedSync = useCallback(() => {
+    void ws.refreshSharedWorkspace();
+  }, [ws.refreshSharedWorkspace]);
+
+  const handleForkSharedSync = useCallback(() => {
+    void ws.forkSharedToLocal();
+  }, [ws.forkSharedToLocal]);
+
+  const handleExitSharedSync = useCallback(() => {
+    void ws.exitSharedSession();
+  }, [ws.exitSharedSession]);
+
+  const handleConfigureShare = useCallback(
+    async (id: string, config: Parameters<typeof ws.configureShare>[1]) => {
+      const updated = await ws.configureShare(id, config);
+      setShareTarget(updated);
+      return updated;
+    },
+    [ws.configureShare],
+  );
 
   useHotkeys({
     onForceSave: handleForceSave,
@@ -437,11 +599,37 @@ export function CanvasBoard() {
     await syncAllFromCloud(true);
   }, [moveToDatabase, notify, pendingMoveToDbId, syncAllFromCloud]);
 
-  if (!ws.initialData || !ws.activeWorkspace) {
+  if (ws.sharedError) {
+    return (
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-white p-6 text-center text-[#1b1b1f] dark:bg-[#121212] dark:text-[#e3e3e8]">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-600 dark:text-red-400">
+          <Link2Off className="h-6 w-6" />
+        </div>
+        <h1 className="text-base font-semibold">Link Preview Tidak Tersedia</h1>
+        <p className="max-w-sm text-xs leading-relaxed text-[#6b7280] dark:text-[#9b9b9f]">
+          {ws.sharedError}
+        </p>
+        <button
+          type="button"
+          onClick={handleExitSharedSync}
+          className="mt-1 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-[#6965db] px-4 py-2 text-xs font-medium text-white transition hover:bg-[#5b57d1]"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Kembali ke Kanvas Saya
+        </button>
+      </div>
+    );
+  }
+
+  if (ws.isLoadingShared || !ws.initialData || !ws.activeWorkspace) {
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center gap-2.5 bg-white text-[#6b7280] dark:bg-[#121212] dark:text-[#9b9b9f]">
         <Loader2 className="h-6 w-6 animate-spin text-[#6965db]" />
-        <p className="text-xs font-medium">Menyiapkan kanvas...</p>
+        <p className="text-xs font-medium">
+          {ws.isLoadingShared
+            ? "Memuat kanvas preview..."
+            : "Menyiapkan kanvas..."}
+        </p>
       </div>
     );
   }
@@ -458,11 +646,17 @@ export function CanvasBoard() {
         storageMode={ws.activeWorkspace.storageMode}
         themePref={themePref}
         user={auth.user}
+        isShared={isShared}
+        isReadOnly={isReadOnly}
         onSelectTheme={handleSelectTheme}
         onOpenDrawer={openDrawer}
         onNewCanvas={handleNewCanvas}
         onForceSave={handleForceSave}
         onQuickToggleStorage={handleQuickToggleStorageSync}
+        onOpenShare={openShareActive}
+        onRefreshShared={handleRefreshSharedSync}
+        onForkShared={handleForkSharedSync}
+        onExitShared={handleExitSharedSync}
         onExportPng={handleExportPngSync}
         onOpenPdf={openPdf}
         onOpenMermaid={openMermaid}
@@ -475,14 +669,19 @@ export function CanvasBoard() {
         isOnline={ws.isOnline}
         theme={resolvedTheme}
         exportingPng={exportingPng}
+        sharedSession={ws.sharedSession}
         onRename={ws.renameActiveWorkspace}
         onOpenDrawer={openDrawer}
         onExportPng={handleExportPngSync}
         onOpenPdf={openPdf}
         onQuickToggleStorage={handleQuickToggleStorageSync}
+        onOpenShare={openShareActive}
+        onRefreshShared={handleRefreshSharedSync}
+        onForkShared={handleForkSharedSync}
+        onExitShared={handleExitSharedSync}
       />
 
-      {drawerOpen && (
+      {drawerOpen && !isShared && (
         <WorkspaceDrawer
           open
           activeWorkspaceId={ws.activeWorkspace.id}
@@ -496,8 +695,21 @@ export function CanvasBoard() {
           onDeleteWorkspace={ws.deleteAnyWorkspace}
           onMoveToDatabase={ws.moveToDatabase}
           onMoveToLocal={ws.moveToLocal}
+          onShareWorkspace={(target) => setShareTarget(target)}
           onImportFile={ws.importExcalidrawFile}
           onSyncCloud={() => ws.syncAllFromCloud(false)}
+          onOpenAuth={openAuth}
+          onNotify={notify}
+        />
+      )}
+
+      {IS_CLOUD_ENABLED && shareTarget && !isShared && (
+        <ShareModal
+          open
+          workspace={shareTarget}
+          user={auth.user}
+          onClose={() => setShareTarget(null)}
+          onConfigureShare={handleConfigureShare}
           onOpenAuth={openAuth}
           onNotify={notify}
         />

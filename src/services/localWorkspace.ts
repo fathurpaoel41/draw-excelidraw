@@ -6,6 +6,7 @@ import type {
   FolderWithCount,
   OrderedExcalidrawElement,
   PersistedAppState,
+  SharePermission,
   StorageMode,
   StoredFileRecord,
   SyncStatus,
@@ -260,6 +261,9 @@ export async function createLocalWorkspace(params?: {
   thumbnail?: string | null;
   version?: number;
   syncStatus?: SyncStatus;
+  shareEnabled?: boolean;
+  sharePermission?: SharePermission;
+  shareToken?: string | null;
 }): Promise<WorkspaceWithFiles> {
   const now = new Date().toISOString();
   const id = params?.id ?? crypto.randomUUID();
@@ -286,6 +290,9 @@ export async function createLocalWorkspace(params?: {
     elementCount: elements.filter((el) => !el.isDeleted).length,
     version: params?.version ?? 1,
     syncStatus: params?.syncStatus ?? "local_only",
+    shareEnabled: params?.shareEnabled ?? false,
+    sharePermission: params?.sharePermission ?? "readonly",
+    shareToken: params?.shareToken ?? null,
     createdAt: now,
     updatedAt: now,
   };
@@ -311,6 +318,9 @@ export async function saveLocalWorkspace(
     syncStatus?: SyncStatus;
     storageMode?: StorageMode;
     remoteId?: string | null;
+    shareEnabled?: boolean;
+    sharePermission?: SharePermission;
+    shareToken?: string | null;
     updatedAt?: string;
   },
 ): Promise<WorkspaceWithFiles | null> {
@@ -349,6 +359,16 @@ export async function saveLocalWorkspace(
     syncStatus: patch.syncStatus ?? existing.syncStatus,
     storageMode: patch.storageMode ?? existing.storageMode,
     remoteId: patch.remoteId !== undefined ? patch.remoteId : existing.remoteId,
+    shareEnabled:
+      patch.shareEnabled !== undefined
+        ? patch.shareEnabled
+        : existing.shareEnabled,
+    sharePermission:
+      patch.sharePermission !== undefined
+        ? patch.sharePermission
+        : existing.sharePermission,
+    shareToken:
+      patch.shareToken !== undefined ? patch.shareToken : existing.shareToken,
     updatedAt: patch.updatedAt ?? new Date().toISOString(),
   };
 

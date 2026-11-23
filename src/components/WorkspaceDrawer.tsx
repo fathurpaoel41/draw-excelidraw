@@ -14,6 +14,7 @@ import {
   Pencil,
   RefreshCw,
   Search,
+  Share2,
   Trash2,
   Upload,
   User,
@@ -49,6 +50,7 @@ interface WorkspaceDrawerProps {
   onDeleteWorkspace: (id: string) => Promise<void>;
   onMoveToDatabase: (id: string) => Promise<void>;
   onMoveToLocal: (id: string, deleteRemote: boolean) => Promise<void>;
+  onShareWorkspace: (workspace: WorkspaceRecord) => void;
   onImportFile: (
     file: File,
     folder?: string,
@@ -119,6 +121,7 @@ export function WorkspaceDrawer({
   onDeleteWorkspace,
   onMoveToDatabase,
   onMoveToLocal,
+  onShareWorkspace,
   onImportFile,
   onSyncCloud,
   onOpenAuth,
@@ -649,7 +652,24 @@ export function WorkspaceDrawer({
                             )}
                           </div>
 
-                          <div className="absolute top-2.5 right-2.5">
+                          <div className="absolute top-2.5 right-2.5 flex items-center gap-1">
+                            {IS_CLOUD_ENABLED &&
+                              ws.shareEnabled &&
+                              ws.shareToken && (
+                                <span
+                                  title={
+                                    ws.sharePermission === "contributor"
+                                      ? "Link aktif: Contributor (Read & Write)"
+                                      : "Link aktif: Read Only"
+                                  }
+                                  className="inline-flex items-center gap-1 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-medium text-white"
+                                >
+                                  <Share2 className="h-2.5 w-2.5" />
+                                  {ws.sharePermission === "contributor"
+                                    ? "Contributor"
+                                    : "Read Only"}
+                                </span>
+                              )}
                             <span className="inline-flex items-center gap-1 rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-medium text-[#52525b] dark:bg-[#232329]/90 dark:text-[#b4b4c0]">
                               {isCloud ? (
                                 <>
@@ -833,6 +853,22 @@ export function WorkspaceDrawer({
                               >
                                 <Download className="h-3.5 w-3.5" />
                               </button>
+
+                              {IS_CLOUD_ENABLED && (
+                                <button
+                                  type="button"
+                                  title="Bagikan link preview"
+                                  aria-label="Bagikan link preview"
+                                  onClick={() => onShareWorkspace(ws)}
+                                  className={`cursor-pointer rounded-md p-1.5 hover:bg-[#f3f4f6] hover:text-[#1b1b1f] dark:hover:bg-[#2e2d39] dark:hover:text-white ${
+                                    ws.shareEnabled && ws.shareToken
+                                      ? "text-emerald-600 dark:text-emerald-400"
+                                      : ""
+                                  }`}
+                                >
+                                  <Share2 className="h-3.5 w-3.5" />
+                                </button>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-1">

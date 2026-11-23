@@ -33,6 +33,8 @@ export type {
 
 export type StorageMode = "local" | "cloud";
 
+export type SharePermission = "readonly" | "contributor";
+
 export type SyncStatus =
   "local_only" | "synced" | "saving" | "pending" | "conflict" | "error";
 
@@ -63,6 +65,9 @@ export interface WorkspaceRecord {
   elementCount: number;
   version: number;
   syncStatus: SyncStatus;
+  shareEnabled?: boolean;
+  sharePermission?: SharePermission;
+  shareToken?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -116,6 +121,9 @@ export interface CloudWorkspaceSummary {
   thumbnail: string | null;
   versi: number;
   jumlah_elemen: number;
+  share_enabled?: boolean;
+  share_permission?: SharePermission;
+  share_token?: string | null;
   dibuat: string;
   diperbarui: string;
 }
@@ -129,6 +137,39 @@ export interface CloudWorkspaceDetail {
   app_state: Partial<PersistedAppState>;
   thumbnail: string | null;
   versi: number;
+  share_enabled?: boolean;
+  share_permission?: SharePermission;
+  share_token?: string | null;
+  dibuat: string;
+  diperbarui: string;
+  files: Record<
+    string,
+    {
+      id: string;
+      mimeType: BinaryFileData["mimeType"];
+      dataURL: DataURL;
+      created: number;
+    }
+  >;
+}
+
+export interface ShareConfigResponse {
+  id: string;
+  share_enabled: boolean;
+  share_permission: SharePermission;
+  share_token: string | null;
+}
+
+export interface SharedWorkspaceDetail {
+  id: string;
+  user_id: number;
+  owner_username: string;
+  judul: string;
+  elements: readonly OrderedExcalidrawElement[];
+  app_state: Partial<PersistedAppState>;
+  thumbnail: string | null;
+  versi: number;
+  share_permission: SharePermission;
   dibuat: string;
   diperbarui: string;
   files: Record<

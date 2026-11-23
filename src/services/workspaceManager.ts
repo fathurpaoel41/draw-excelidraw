@@ -7,6 +7,7 @@ import type {
   CloudWorkspaceDetail,
   OrderedExcalidrawElement,
   PersistedAppState,
+  SharePermission,
   StorageMode,
   WorkspaceRecord,
   WorkspaceWithFiles,
@@ -87,6 +88,9 @@ export async function openWorkspace(
           thumbnail: remote.thumbnail,
           version: remote.versi,
           syncStatus: "synced",
+          shareEnabled: remote.share_enabled ?? false,
+          sharePermission: remote.share_permission ?? "readonly",
+          shareToken: remote.share_token ?? null,
           updatedAt: remote.diperbarui,
         });
         if (updated) return updated;
@@ -144,6 +148,9 @@ export async function createNewWorkspace(params: {
       thumbnail: createdRemote.thumbnail,
       version: createdRemote.versi,
       syncStatus: "synced",
+      shareEnabled: createdRemote.share_enabled ?? false,
+      sharePermission: createdRemote.share_permission ?? "readonly",
+      shareToken: createdRemote.share_token ?? null,
     });
     await local.setLastActiveWorkspaceId(cached.id);
     return cached;
@@ -322,10 +329,63 @@ export async function moveWorkspaceToDatabase(
     remoteId: remote.id,
     version: remote.versi,
     syncStatus: "synced",
+    shareEnabled: remote.share_enabled ?? false,
+    sharePermission: remote.share_permission ?? "readonly",
+    shareToken: remote.share_token ?? null,
     updatedAt: remote.diperbarui,
   });
 
   if (!updated) throw new Error("Gagal memperbarui status lokal.");
+  return updated;
+}
+
+export async function configureWorkspaceShare(
+  id: string,
+  config: {
+    enabled: boolean;
+    permission?: SharePermission;
+    regenerate?: boolean;
+  },
+): Promise<WorkspaceWithFiles> {
+  if (!IS_CLOUD_ENABLED) {
+    throw new Error("Mode penyimpanan hanya Lokal (Database dinonaktifkan).");
+  }
+  if (!isAuthenticated()) {
+    throw new Error(
+      "Masuk akun Database terlebih dahulu untuk membagikan link.",
+    );
+  }
+
+  let current = await local.getWorkspace(id);
+  if (!current) {
+    throw new Error("Canvas tidak ditemukan.");
+  }
+
+  if (current.storageMode !== "cloud" || !current.remoteId) {
+    if (!config.enabled) {
+      return current;
+    }
+    current = await moveWorkspaceToDatabase(id);
+  }
+
+  if (!current.remoteId) {
+    throw new Error("Canvas belum tersinkron ke Database.");
+  }
+
+  const shareConfig = await cloud.updateWorkspaceShare(
+    current.remoteId,
+    config,
+  );
+  const updated = await local.saveLocalWorkspace(current.id, {
+    shareEnabled: shareConfig.share_enabled,
+    sharePermission: shareConfig.share_permission,
+    shareToken: shareConfig.share_token,
+    updatedAt: current.updatedAt,
+  });
+
+  if (!updated) {
+    throw new Error("Gagal menyimpan pengaturan share.");
+  }
   return updated;
 }
 
@@ -355,6 +415,9 @@ export async function moveWorkspaceToLocal(
     storageMode: "local",
     remoteId: null,
     syncStatus: "local_only",
+    shareEnabled: false,
+    sharePermission: "readonly",
+    shareToken: null,
   });
   if (!updated) throw new Error("Gagal memindahkan canvas ke lokal.");
   return updated;
@@ -587,6 +650,9 @@ export async function syncCloudToLocalCache(): Promise<number> {
           thumbnail: detail.thumbnail,
           version: detail.versi,
           syncStatus: "synced",
+          shareEnabled: detail.share_enabled ?? false,
+          sharePermission: detail.share_permission ?? "readonly",
+          shareToken: detail.share_token ?? null,
         });
         syncedCount += 1;
       } catch {
@@ -608,12 +674,27 @@ export async function syncCloudToLocalCache(): Promise<number> {
           thumbnail: detail.thumbnail,
           version: detail.versi,
           syncStatus: "synced",
+          shareEnabled: detail.share_enabled ?? false,
+          sharePermission: detail.share_permission ?? "readonly",
+          shareToken: detail.share_token ?? null,
           updatedAt: detail.diperbarui,
         });
         syncedCount += 1;
       } catch {
         // Skip
       }
+    } else if (
+      Boolean(remoteItem.share_enabled) !== Boolean(existing.shareEnabled) ||
+      (remoteItem.share_permission ?? "readonly") !==
+        (existing.sharePermission ?? "readonly") ||
+      (remoteItem.share_token ?? null) !== (existing.shareToken ?? null)
+    ) {
+      await local.saveLocalWorkspace(existing.id, {
+        shareEnabled: remoteItem.share_enabled ?? false,
+        sharePermission: remoteItem.share_permission ?? "readonly",
+        shareToken: remoteItem.share_token ?? null,
+        updatedAt: existing.updatedAt,
+      });
     }
   }
 

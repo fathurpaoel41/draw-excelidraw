@@ -1,14 +1,21 @@
 import {
   AlertTriangle,
+  ArrowLeft,
   Cloud,
   CloudOff,
+  Copy,
+  Eye,
   FileDown,
   Folder,
   HardDrive,
   ImageDown,
   Loader2,
+  RefreshCw,
+  Share2,
+  Users,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { SharedSessionInfo } from "../hooks/useWorkspace";
 import { IS_CLOUD_ENABLED } from "../lib/config";
 import type { SyncStatus, Theme, WorkspaceWithFiles } from "../types/workspace";
 
@@ -18,11 +25,16 @@ interface TopRightControlsProps {
   isOnline: boolean;
   theme: Theme;
   exportingPng: boolean;
+  sharedSession?: SharedSessionInfo | null;
   onRename: (newTitle: string) => Promise<void>;
   onOpenDrawer: () => void;
   onExportPng: () => void;
   onOpenPdf: () => void;
   onQuickToggleStorage: () => void;
+  onOpenShare?: () => void;
+  onRefreshShared?: () => void;
+  onForkShared?: () => void;
+  onExitShared?: () => void;
 }
 
 export function TopRightControls({
@@ -31,11 +43,16 @@ export function TopRightControls({
   isOnline,
   theme,
   exportingPng,
+  sharedSession = null,
   onRename,
   onOpenDrawer,
   onExportPng,
   onOpenPdf,
   onQuickToggleStorage,
+  onOpenShare,
+  onRefreshShared,
+  onForkShared,
+  onExitShared,
 }: TopRightControlsProps) {
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(workspace?.title ?? "");
@@ -73,8 +90,45 @@ export function TopRightControls({
 
   const mutedText = isDark ? "text-[#9b9b9f]" : "text-[#6b7280]";
 
+  const isShared = Boolean(sharedSession);
+  const isReadOnly = sharedSession?.permission === "readonly";
+
   const renderStorageStatus = () => {
     if (!workspace) return null;
+
+    if (sharedSession) {
+      if (sharedSession.permission === "readonly") {
+        return (
+          <span
+            title={`Preview Read Only (dibagikan oleh ${sharedSession.ownerUsername})`}
+            className="inline-flex items-center gap-1 rounded-md bg-amber-500/12 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+          >
+            <Eye className="h-3 w-3" />
+            <span className="hidden md:inline">Read Only</span>
+          </span>
+        );
+      }
+
+      return (
+        <span
+          title={`Contributor Read & Write (dibagikan oleh ${sharedSession.ownerUsername})`}
+          className="inline-flex items-center gap-1 rounded-md bg-emerald-500/12 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
+        >
+          {syncStatus === "saving" ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <Users className="h-3 w-3" />
+          )}
+          <span className="hidden md:inline">
+            {syncStatus === "saving"
+              ? "Menyimpan"
+              : syncStatus === "error"
+                ? "Gagal Simpan"
+                : "Contributor"}
+          </span>
+        </span>
+      );
+    }
 
     if (syncStatus === "saving") {
       return (
@@ -161,7 +215,7 @@ export function TopRightControls({
     >
       {workspace && (
         <div className="flex items-center gap-1 pr-0.5">
-          {workspace.folder && (
+          {!isShared && workspace.folder && (
             <button
               type="button"
               onClick={onOpenDrawer}
@@ -177,7 +231,7 @@ export function TopRightControls({
             </button>
           )}
 
-          {editing ? (
+          {editing && !isReadOnly ? (
             <input
               ref={inputRef}
               type="text"
@@ -199,6 +253,13 @@ export function TopRightControls({
                 isDark ? "bg-[#18181d] text-white" : "bg-white text-[#1b1b1f]"
               }`}
             />
+          ) : isReadOnly ? (
+            <span
+              title={workspace.title}
+              className="max-w-[110px] truncate px-1.5 py-1 text-xs font-medium sm:max-w-[150px]"
+            >
+              {workspace.title}
+            </span>
           ) : (
             <button
               type="button"
@@ -218,6 +279,83 @@ export function TopRightControls({
         className={`mx-0.5 h-4 w-px ${isDark ? "bg-[#31303b]" : "bg-[#e5e7eb]"}`}
         aria-hidden="true"
       />
+
+      {isShared ? (
+        <>
+          {onRefreshShared && (
+            <button
+              type="button"
+              onClick={onRefreshShared}
+              title="Muat ulang versi terbaru dari server"
+              aria-label="Muat ulang kanvas"
+              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border px-2 text-xs font-medium transition ${
+                isDark
+                  ? "border-[#3a3946] bg-[#2c2b36] text-[#e3e3e8] hover:bg-[#353442]"
+                  : "border-[#e5e7eb] bg-[#f8f9fa] text-[#1b1b1f] hover:bg-[#f1f0ff]"
+              }`}
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+            </button>
+          )}
+
+          {onForkShared && (
+            <button
+              type="button"
+              onClick={onForkShared}
+              title="Simpan salinan kanvas ini ke My Canvas Anda"
+              aria-label="Simpan salinan ke My Canvas"
+              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border px-2 text-xs font-medium transition ${
+                isDark
+                  ? "border-[#3a3946] bg-[#2c2b36] text-[#e3e3e8] hover:bg-[#353442]"
+                  : "border-[#e5e7eb] bg-[#f8f9fa] text-[#1b1b1f] hover:bg-[#f1f0ff]"
+              }`}
+            >
+              <Copy className="h-3.5 w-3.5" />
+              <span className="hidden lg:inline">Salin</span>
+            </button>
+          )}
+
+          {onExitShared && (
+            <button
+              type="button"
+              onClick={onExitShared}
+              title="Keluar dari preview & buka My Canvas saya"
+              aria-label="Kembali ke Kanvas Saya"
+              className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border px-2 text-xs font-medium transition ${
+                isDark
+                  ? "border-[#3a3946] bg-[#2c2b36] text-[#e3e3e8] hover:bg-[#353442]"
+                  : "border-[#e5e7eb] bg-[#f8f9fa] text-[#1b1b1f] hover:bg-[#f1f0ff]"
+              }`}
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span className="hidden md:inline">Kanvas Saya</span>
+            </button>
+          )}
+        </>
+      ) : (
+        IS_CLOUD_ENABLED &&
+        onOpenShare && (
+          <button
+            type="button"
+            onClick={onOpenShare}
+            title="Bagikan link preview / contributor"
+            aria-label="Bagikan link"
+            className={`inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition ${
+              workspace?.shareEnabled && workspace?.shareToken
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300"
+                : isDark
+                  ? "border-[#3a3946] bg-[#2c2b36] text-[#e3e3e8] hover:bg-[#353442]"
+                  : "border-[#e5e7eb] bg-[#f8f9fa] text-[#1b1b1f] hover:bg-[#f1f0ff]"
+            }`}
+          >
+            {workspace?.shareEnabled && workspace?.shareToken && (
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            )}
+            <Share2 className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Share</span>
+          </button>
+        )
+      )}
 
       <button
         type="button"

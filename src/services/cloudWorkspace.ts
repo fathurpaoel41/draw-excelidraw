@@ -6,6 +6,9 @@ import type {
   CloudWorkspaceSummary,
   OrderedExcalidrawElement,
   PersistedAppState,
+  ShareConfigResponse,
+  SharePermission,
+  SharedWorkspaceDetail,
 } from "../types/workspace";
 
 export async function listWorkspaces(params?: {
@@ -102,5 +105,49 @@ export async function deleteWorkspace(id: string): Promise<void> {
   await apiRequest<{ id: string; status: string }>(
     `/api/draw/workspaces/${id}`,
     { method: "DELETE" },
+  );
+}
+
+export async function updateWorkspaceShare(
+  id: string,
+  payload: {
+    enabled: boolean;
+    permission?: SharePermission;
+    regenerate?: boolean;
+  },
+): Promise<ShareConfigResponse> {
+  return apiRequest<ShareConfigResponse>(`/api/draw/workspaces/${id}/share`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getSharedWorkspace(
+  token: string,
+): Promise<SharedWorkspaceDetail> {
+  return apiRequest<SharedWorkspaceDetail>(
+    `/api/draw/shared/${encodeURIComponent(token)}`,
+    { method: "GET", auth: false },
+  );
+}
+
+export async function updateSharedWorkspace(
+  token: string,
+  payload: {
+    judul?: string;
+    elements: readonly OrderedExcalidrawElement[];
+    app_state: Partial<PersistedAppState>;
+    thumbnail?: string | null;
+    expected_version?: number;
+    files?: BinaryFiles;
+  },
+): Promise<SharedWorkspaceDetail> {
+  return apiRequest<SharedWorkspaceDetail>(
+    `/api/draw/shared/${encodeURIComponent(token)}`,
+    {
+      method: "PUT",
+      auth: false,
+      body: JSON.stringify(payload),
+    },
   );
 }

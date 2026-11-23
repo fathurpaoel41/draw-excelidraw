@@ -1,6 +1,8 @@
 import { getSceneVersion } from "@excalidraw/excalidraw";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApiError } from "../lib/api";
 import { generateWorkspaceThumbnail } from "../lib/thumbnail";
+import * as cloud from "../services/cloudWorkspace";
 import * as local from "../services/localWorkspace";
 import * as manager from "../services/workspaceManager";
 import type {
@@ -9,6 +11,8 @@ import type {
   CloudWorkspaceDetail,
   ExcalidrawImperativeAPI,
   OrderedExcalidrawElement,
+  SharePermission,
+  SharedWorkspaceDetail,
   StorageMode,
   SyncStatus,
   WorkspaceWithFiles,
@@ -17,6 +21,75 @@ import type {
 export interface ConflictState {
   localWorkspace: WorkspaceWithFiles;
   serverWorkspace: CloudWorkspaceDetail;
+}
+
+export interface SharedSessionInfo {
+  token: string;
+  permission: SharePermission;
+  ownerUsername: string;
+}
+
+function getShareTokenFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const val = new URLSearchParams(window.location.search).get("share");
+  const trimmed = val?.trim() ?? "";
+  return trimmed || null;
+}
+
+function clearShareTokenFromUrl(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("share")) {
+    url.searchParams.delete("share");
+    window.history.replaceState({}, "", url.toString());
+  }
+}
+
+function sharedDetailToWorkspace(
+  detail: SharedWorkspaceDetail,
+): WorkspaceWithFiles {
+  const appState = local.extractPersistedAppState(detail.app_state);
+  const elements = detail.elements ?? [];
+  return {
+    id: detail.id,
+    title: detail.judul,
+    folder: "",
+    storageMode: "cloud",
+    remoteId: detail.id,
+    elements,
+    appState,
+    thumbnail: detail.thumbnail,
+    elementCount: elements.filter((el) => !el.isDeleted).length,
+    version: detail.versi,
+    syncStatus: "synced",
+    shareEnabled: true,
+    sharePermission: detail.share_permission,
+    shareToken: null,
+    createdAt: detail.dibuat,
+    updatedAt: detail.diperbarui,
+    files: (detail.files ?? {}) as BinaryFiles,
+  };
+}
+
+function sharedDetailToConflictServer(
+  detail: SharedWorkspaceDetail,
+): CloudWorkspaceDetail {
+  return {
+    id: detail.id,
+    user_id: detail.user_id,
+    judul: detail.judul,
+    folder: "",
+    elements: detail.elements,
+    app_state: detail.app_state,
+    thumbnail: detail.thumbnail,
+    versi: detail.versi,
+    share_enabled: true,
+    share_permission: detail.share_permission,
+    share_token: null,
+    dibuat: detail.dibuat,
+    diperbarui: detail.diperbarui,
+    files: detail.files,
+  };
 }
 
 function buildSceneSignature(
@@ -67,9 +140,17 @@ export function useWorkspace(params: {
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
   const [conflict, setConflict] = useState<ConflictState | null>(null);
+  const [sharedSession, setSharedSession] = useState<SharedSessionInfo | null>(
+    null,
+  );
+  const [sharedError, setSharedError] = useState<string | null>(null);
+  const [isLoadingShared, setIsLoadingShared] = useState<boolean>(() =>
+    Boolean(getShareTokenFromUrl()),
+  );
 
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const activeWorkspaceRef = useRef<WorkspaceWithFiles | null>(null);
+  const sharedSessionRef = useRef<SharedSessionInfo | null>(null);
   const syncStatusRef = useRef<SyncStatus>("local_only");
   const lastSavedSigRef = useRef<string>("");
   const lastThumbSigRef = useRef<string>("");
@@ -84,6 +165,7 @@ export function useWorkspace(params: {
   const isSavingRef = useRef<boolean>(false);
 
   activeWorkspaceRef.current = activeWorkspace;
+  sharedSessionRef.current = sharedSession;
 
   const updateSyncStatus = useCallback((next: SyncStatus) => {
     if (syncStatusRef.current !== next) {
@@ -140,23 +222,74 @@ export function useWorkspace(params: {
     [clearScheduledThumbnail, updateSyncStatus],
   );
 
-  // Load workspace terakhir seketika dari IndexedDB saat aplikasi dibuka
+  const loadSharedByToken = useCallback(
+    async (token: string) => {
+      setIsLoadingShared(true);
+      setSharedError(null);
+      try {
+        const detail = await cloud.getSharedWorkspace(token);
+        const sessionInfo: SharedSessionInfo = {
+          token,
+          permission: detail.share_permission,
+          ownerUsername: detail.owner_username,
+        };
+        sharedSessionRef.current = sessionInfo;
+        setSharedSession(sessionInfo);
+        mountWorkspaceSession(sharedDetailToWorkspace(detail));
+      } catch (err) {
+        sharedSessionRef.current = null;
+        setSharedSession(null);
+        setSharedError(
+          err instanceof Error
+            ? err.message
+            : "Link bagikan tidak ditemukan atau sudah dinonaktifkan.",
+        );
+      } finally {
+        setIsLoadingShared(false);
+      }
+    },
+    [mountWorkspaceSession],
+  );
+
+  // Load workspace dari share link jika ada ?share=<token>, atau workspace terakhir dari IndexedDB
   useEffect(() => {
     let mounted = true;
-    manager
-      .ensureInitialWorkspace()
-      .then((ws) => {
-        if (!mounted) return;
-        mountWorkspaceSession(ws);
-      })
-      .catch(() => {
-        if (!mounted) return;
-        onNotify("Gagal memuat workspace lokal dari browser.", "error");
-      });
+    const shareToken = getShareTokenFromUrl();
+    if (shareToken) {
+      void loadSharedByToken(shareToken);
+    } else {
+      manager
+        .ensureInitialWorkspace()
+        .then((ws) => {
+          if (!mounted) return;
+          mountWorkspaceSession(ws);
+        })
+        .catch(() => {
+          if (!mounted) return;
+          onNotify("Gagal memuat workspace lokal dari browser.", "error");
+        });
+    }
+
+    const onPopState = () => {
+      const token = getShareTokenFromUrl();
+      if (token) {
+        void loadSharedByToken(token);
+      } else if (sharedSessionRef.current) {
+        sharedSessionRef.current = null;
+        setSharedSession(null);
+        setSharedError(null);
+        setIsLoadingShared(false);
+        void manager.ensureInitialWorkspace().then((ws) => {
+          if (mounted) mountWorkspaceSession(ws);
+        });
+      }
+    };
+    window.addEventListener("popstate", onPopState);
     return () => {
       mounted = false;
+      window.removeEventListener("popstate", onPopState);
     };
-  }, [mountWorkspaceSession, onNotify]);
+  }, [loadSharedByToken, mountWorkspaceSession, onNotify]);
 
   // Sinkronisasi daftar workspace Cloud ke cache IndexedDB bila login & online
   const syncAllFromCloud = useCallback(
@@ -203,6 +336,7 @@ export function useWorkspace(params: {
   }, [syncAllFromCloud]);
 
   const refreshActiveThumbnail = useCallback(async () => {
+    if (sharedSessionRef.current) return;
     const current = activeWorkspaceRef.current;
     const api = apiRef.current;
     if (!current || !api) return;
@@ -275,6 +409,79 @@ export function useWorkspace(params: {
         return;
       }
 
+      const activeShare = sharedSessionRef.current;
+      if (activeShare) {
+        if (activeShare.permission !== "contributor") {
+          return;
+        }
+        isSavingRef.current = true;
+        updateSyncStatus("saving");
+        try {
+          const thumbnail =
+            options.withThumbnail === true
+              ? await generateWorkspaceThumbnail(
+                  elements,
+                  {
+                    viewBackgroundColor: appState.viewBackgroundColor,
+                    theme: appState.theme,
+                  },
+                  files,
+                )
+              : current.thumbnail;
+          const persistedAppState = local.extractPersistedAppState(appState);
+          const referencedFiles = local.filterReferencedFiles(elements, files);
+          const remote = await cloud.updateSharedWorkspace(activeShare.token, {
+            judul: current.title,
+            elements,
+            app_state: persistedAppState,
+            thumbnail,
+            expected_version: current.version,
+            files: referencedFiles,
+          });
+          lastSavedSigRef.current = sig;
+          const nextWorkspace = sharedDetailToWorkspace(remote);
+          activeWorkspaceRef.current = nextWorkspace;
+          setActiveWorkspace(nextWorkspace);
+          updateSyncStatus("synced");
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 409) {
+            const conflictData = err.data as
+              { current?: SharedWorkspaceDetail } | undefined;
+            if (conflictData?.current) {
+              updateSyncStatus("conflict");
+              setConflict({
+                localWorkspace: {
+                  ...current,
+                  elements: [...elements],
+                  appState: local.extractPersistedAppState(appState),
+                  files,
+                },
+                serverWorkspace: sharedDetailToConflictServer(
+                  conflictData.current,
+                ),
+              });
+              onNotify(
+                "Konflik versi: kanvas telah diubah oleh pengguna lain.",
+                "warning",
+              );
+              return;
+            }
+          }
+          if (err instanceof ApiError && err.status === 403) {
+            setSharedSession((prev) =>
+              prev ? { ...prev, permission: "readonly" } : prev,
+            );
+            updateSyncStatus("synced");
+            onNotify("Izin link diubah pemilik menjadi Read Only.", "warning");
+            return;
+          }
+          updateSyncStatus("error");
+        } finally {
+          isSavingRef.current = false;
+        }
+        return;
+      }
+
       isSavingRef.current = true;
       updateSyncStatus("saving");
 
@@ -341,11 +548,17 @@ export function useWorkspace(params: {
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "hidden") {
-        void performSave({ syncCloud: false, withThumbnail: false });
+        void performSave({
+          syncCloud: Boolean(sharedSessionRef.current),
+          withThumbnail: false,
+        });
       }
     };
     const handlePageHide = () => {
-      void performSave({ syncCloud: false, withThumbnail: false });
+      void performSave({
+        syncCloud: Boolean(sharedSessionRef.current),
+        withThumbnail: false,
+      });
     };
     document.addEventListener("visibilitychange", handleVisibility);
     window.addEventListener("pagehide", handlePageHide);
@@ -364,6 +577,7 @@ export function useWorkspace(params: {
     ) => {
       const current = activeWorkspaceRef.current;
       if (!current) return;
+      if (sharedSessionRef.current?.permission === "readonly") return;
 
       latestSceneRef.current = { elements, appState, files };
 
@@ -383,6 +597,13 @@ export function useWorkspace(params: {
   );
 
   const forceSave = useCallback(async () => {
+    if (sharedSessionRef.current?.permission === "readonly") {
+      onNotify(
+        "Mode Read Only: Anda tidak memiliki izin untuk menyimpan perubahan.",
+        "warning",
+      );
+      return;
+    }
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
@@ -450,6 +671,37 @@ export function useWorkspace(params: {
       const current = activeWorkspaceRef.current;
       const cleaned = newTitle.trim().slice(0, 120);
       if (!current || !cleaned || cleaned === current.title) return;
+
+      const activeShare = sharedSessionRef.current;
+      if (activeShare) {
+        if (activeShare.permission !== "contributor") return;
+        const api = apiRef.current;
+        const elements = api
+          ? api.getSceneElementsIncludingDeleted()
+          : current.elements;
+        const appState = api ? api.getAppState() : current.appState;
+        const files = api ? api.getFiles() : current.files;
+        try {
+          const remote = await cloud.updateSharedWorkspace(activeShare.token, {
+            judul: cleaned,
+            elements,
+            app_state: local.extractPersistedAppState(appState),
+            expected_version: current.version,
+            files: local.filterReferencedFiles(elements, files),
+          });
+          const nextWorkspace = sharedDetailToWorkspace(remote);
+          activeWorkspaceRef.current = nextWorkspace;
+          setActiveWorkspace(nextWorkspace);
+          updateSyncStatus("synced");
+        } catch (err) {
+          onNotify(
+            err instanceof Error ? err.message : "Gagal mengubah judul canvas.",
+            "error",
+          );
+        }
+        return;
+      }
+
       const updated = await manager.updateWorkspaceMeta(current.id, {
         title: cleaned,
       });
@@ -458,7 +710,7 @@ export function useWorkspace(params: {
         updateSyncStatus(updated.syncStatus);
       }
     },
-    [updateSyncStatus],
+    [onNotify, updateSyncStatus],
   );
 
   const moveWorkspaceFolder = useCallback(
@@ -602,6 +854,65 @@ export function useWorkspace(params: {
       if (!conflict) return;
       const { localWorkspace, serverWorkspace } = conflict;
 
+      const activeShare = sharedSessionRef.current;
+      if (activeShare) {
+        if (strategy === "server") {
+          const updated: WorkspaceWithFiles = {
+            ...localWorkspace,
+            title: serverWorkspace.judul,
+            elements: serverWorkspace.elements,
+            appState: local.extractPersistedAppState(serverWorkspace.app_state),
+            files: serverWorkspace.files as BinaryFiles,
+            thumbnail: serverWorkspace.thumbnail,
+            version: serverWorkspace.versi,
+            syncStatus: "synced",
+            updatedAt: serverWorkspace.diperbarui,
+          };
+          mountWorkspaceSession(updated);
+          setConflict(null);
+          onNotify("Versi terbaru dari server berhasil dimuat.", "success");
+        } else if (strategy === "overwrite") {
+          const remote = await cloud.updateSharedWorkspace(activeShare.token, {
+            judul: localWorkspace.title,
+            elements: localWorkspace.elements,
+            app_state: localWorkspace.appState,
+            thumbnail: localWorkspace.thumbnail,
+            expected_version: serverWorkspace.versi,
+            files: local.filterReferencedFiles(
+              localWorkspace.elements,
+              localWorkspace.files,
+            ),
+          });
+          const updated = sharedDetailToWorkspace(remote);
+          activeWorkspaceRef.current = updated;
+          setActiveWorkspace(updated);
+          updateSyncStatus("synced");
+          setConflict(null);
+          onNotify("Perubahan Anda berhasil menimpa versi server.", "success");
+        } else {
+          const localCopy = await local.createLocalWorkspace({
+            title: `${localWorkspace.title} (Salinan Lokal)`.slice(0, 120),
+            folder: "",
+            storageMode: "local",
+            elements: localWorkspace.elements,
+            appState: localWorkspace.appState,
+            files: localWorkspace.files,
+            thumbnail: localWorkspace.thumbnail,
+          });
+          clearShareTokenFromUrl();
+          sharedSessionRef.current = null;
+          setSharedSession(null);
+          setSharedError(null);
+          mountWorkspaceSession(localCopy);
+          setConflict(null);
+          onNotify(
+            `Versi Anda disimpan ke My Canvas sebagai "${localCopy.title}".`,
+            "info",
+          );
+        }
+        return;
+      }
+
       if (strategy === "server") {
         const updated = await manager.resolveConflictWithServer(
           localWorkspace.id,
@@ -657,6 +968,77 @@ export function useWorkspace(params: {
     };
   }, [sessionSnapshot]);
 
+  const configureShare = useCallback(
+    async (
+      id: string,
+      config: {
+        enabled: boolean;
+        permission?: SharePermission;
+        regenerate?: boolean;
+      },
+    ) => {
+      if (activeWorkspaceRef.current?.id === id && config.enabled) {
+        await performSave({
+          force: true,
+          syncCloud: false,
+          withThumbnail: true,
+        });
+      }
+      const updated = await manager.configureWorkspaceShare(id, config);
+      if (activeWorkspaceRef.current?.id === id) {
+        activeWorkspaceRef.current = updated;
+        setActiveWorkspace(updated);
+        updateSyncStatus(updated.syncStatus);
+      }
+      return updated;
+    },
+    [performSave, updateSyncStatus],
+  );
+
+  const refreshSharedWorkspace = useCallback(async () => {
+    const activeShare = sharedSessionRef.current;
+    if (!activeShare) return;
+    await loadSharedByToken(activeShare.token);
+    onNotify("Kanvas preview diperbarui dari server.", "info");
+  }, [loadSharedByToken, onNotify]);
+
+  const forkSharedToLocal = useCallback(async () => {
+    const current = activeWorkspaceRef.current;
+    if (!current) return;
+    const api = apiRef.current;
+    const elements = api
+      ? api.getSceneElementsIncludingDeleted()
+      : current.elements;
+    const appState = api ? api.getAppState() : current.appState;
+    const files = api ? api.getFiles() : current.files;
+
+    const created = await manager.createNewWorkspace({
+      title: `${current.title} (Salinan)`.slice(0, 120),
+      folder: "",
+      storageMode: "local",
+      elements,
+      appState: local.extractPersistedAppState(appState),
+      files,
+      thumbnail: current.thumbnail,
+    });
+    clearShareTokenFromUrl();
+    sharedSessionRef.current = null;
+    setSharedSession(null);
+    setSharedError(null);
+    mountWorkspaceSession(created);
+    onNotify(`Salinan "${created.title}" disimpan ke My Canvas.`, "success");
+  }, [mountWorkspaceSession, onNotify]);
+
+  const exitSharedSession = useCallback(async () => {
+    clearShareTokenFromUrl();
+    sharedSessionRef.current = null;
+    setSharedSession(null);
+    setSharedError(null);
+    setIsLoadingShared(false);
+    const ws = await manager.ensureInitialWorkspace();
+    mountWorkspaceSession(ws);
+  }, [mountWorkspaceSession]);
+
   return {
     activeWorkspace,
     sessionKey,
@@ -664,6 +1046,9 @@ export function useWorkspace(params: {
     syncStatus,
     isOnline,
     conflict,
+    sharedSession,
+    sharedError,
+    isLoadingShared,
     apiRef,
     setExcalidrawAPI,
     handleSceneChange,
@@ -680,6 +1065,10 @@ export function useWorkspace(params: {
     deleteAnyWorkspace,
     importExcalidrawFile,
     syncAllFromCloud,
+    configureShare,
+    refreshSharedWorkspace,
+    forkSharedToLocal,
+    exitSharedSession,
     resolveConflict,
     dismissConflict: () => setConflict(null),
   };
